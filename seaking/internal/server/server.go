@@ -6,10 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/my-chat/common/pkg/auth"
-	"github.com/my-chat/common/pkg/errors"
 	"github.com/my-chat/common/pkg/log"
 	"github.com/my-chat/common/pkg/middleware"
-	"github.com/my-chat/seaking/internal/api"
 	"github.com/my-chat/seaking/internal/conf"
 	"github.com/my-chat/seaking/internal/rpc"
 	"github.com/my-chat/seaking/internal/service/conversation"
@@ -23,7 +21,6 @@ import (
 type Server struct {
 	config     conf.Config
 	storage    *storage.Storage
-	api        *api.API
 	rpcHandler *rpc.Handler
 	jwtManager *auth.JWTManager
 	engine     *gin.Engine
@@ -39,16 +36,12 @@ func NewServer(config conf.Config, storage *storage.Storage) *Server {
 	groupService := group.NewService(storage)
 	convService := conversation.NewService(storage)
 
-	// 创建API
-	apiHandler := api.NewAPI(userService, relationService, groupService, jwtManager)
-
-	// 创建RPC处理器
-	rpcHandler := rpc.NewHandler(userService, convService, jwtManager)
+	// 创建RPC处理器（内部服务通信）
+	rpcHandler := rpc.NewHandler(userService, convService, relationService, groupService, jwtManager)
 
 	return &Server{
 		config:     config,
 		storage:    storage,
-		api:        apiHandler,
 		rpcHandler: rpcHandler,
 		jwtManager: jwtManager,
 	}
@@ -84,73 +77,4 @@ func (s *Server) registerRoutes() {
 
 	// JSON-RPC 接口（供内部服务调用）
 	s.engine.POST("/api/rpc", s.rpcHandler.Handle)
-
-	// 公开接口
-	public := s.engine.Group("/api/v1")
-	{
-		public.POST("/register", s.api.Register)
-		public.POST("/login", s.api.Login)
-	}
-
-	// 需要认证的接口
-	private := s.engine.Group("/api/v1")
-	private.Use(s.authMiddleware())
-	{
-		// 用户
-		private.GET("/profile", s.api.GetProfile)
-		private.PUT("/profile", s.api.UpdateProfile)
-		private.PUT("/password", s.api.ChangePassword)
-
-		// 好友
-		private.GET("/friends", s.api.GetFriends)
-		private.POST("/friends/request", s.api.SendFriendRequest)
-		private.POST("/friends/accept", s.api.AcceptFriendRequest)
-		private.POST("/friends/reject", s.api.RejectFriendRequest)
-		private.DELETE("/friends/:uid", s.api.DeleteFriend)
-		private.POST("/friends/block", s.api.BlockFriend)
-		private.POST("/friends/unblock", s.api.UnblockFriend)
-		private.GET("/friends/requests", s.api.GetPendingRequests)
-
-		// 群组
-		private.GET("/groups", s.api.GetUserGroups)
-		private.POST("/groups", s.api.CreateGroup)
-		private.GET("/groups/:group_id", s.api.GetGroup)
-		private.PUT("/groups/:group_id", s.api.UpdateGroup)
-		private.DELETE("/groups/:group_id", s.api.DismissGroup)
-		private.GET("/groups/:group_id/members", s.api.GetGroupMembers)
-		private.POST("/groups/:group_id/members", s.api.AddGroupMember)
-		private.DELETE("/groups/:group_id/members/:member_id", s.api.RemoveGroupMember)
-		private.POST("/groups/:group_id/leave", s.api.LeaveGroup)
-		private.POST("/groups/:group_id/transfer", s.api.TransferGroupOwner)
-		private.POST("/groups/:group_id/admin", s.api.SetGroupAdmin)
-	}
-}
-
-// authMiddleware 认证中间件
-func (s *Server) authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			api.Error(c, errors.ErrLoginRequired)
-			c.Abort()
-			return
-		}
-
-		// 移除 "Bearer " 前缀
-		if len(token) > 7 && token[:7] == "Bearer " {
-			token = token[7:]
-		}
-
-		claims, err := s.jwtManager.ParseToken(token)
-		if err != nil {
-			api.Error(c, errors.ErrInvalidToken)
-			c.Abort()
-			return
-		}
-
-		c.Set("uid", claims.Uid)
-		c.Set("device_id", claims.DeviceId)
-		c.Set("platform", claims.Platform)
-		c.Next()
-	}
 }

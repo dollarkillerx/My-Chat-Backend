@@ -55,6 +55,52 @@ func (h *Handler) HandleMessage(conn *ws.Conn, data []byte) {
 	case protocol.CmdSync:
 		h.handleSync(conn, env)
 
+	// 好友相关命令
+	case protocol.CmdGetFriends:
+		h.handleGetFriends(conn, env)
+
+	case protocol.CmdSendFriendRequest:
+		h.handleSendFriendRequest(conn, env)
+
+	case protocol.CmdGetFriendRequests:
+		h.handleGetFriendRequests(conn, env)
+
+	case protocol.CmdAcceptFriendRequest:
+		h.handleAcceptFriendRequest(conn, env)
+
+	case protocol.CmdRejectFriendRequest:
+		h.handleRejectFriendRequest(conn, env)
+
+	case protocol.CmdDeleteFriend:
+		h.handleDeleteFriend(conn, env)
+
+	// 会话相关命令
+	case protocol.CmdGetConversations:
+		h.handleGetConversations(conn, env)
+
+	case protocol.CmdCreateConversation:
+		h.handleCreateConversation(conn, env)
+
+	case protocol.CmdGetConversationMembers:
+		h.handleGetConversationMembers(conn, env)
+
+	// 群组相关命令
+	case protocol.CmdGetGroups:
+		h.handleGetGroups(conn, env)
+
+	case protocol.CmdCreateGroup:
+		h.handleCreateGroup(conn, env)
+
+	case protocol.CmdGetGroupInfo:
+		h.handleGetGroupInfo(conn, env)
+
+	case protocol.CmdGetGroupMembers:
+		h.handleGetGroupMembers(conn, env)
+
+	// 用户相关命令
+	case protocol.CmdGetUserInfo:
+		h.handleGetUserInfo(conn, env)
+
 	default:
 		h.sendError(conn, env.Seq, errors.New(errors.ErrCodeInvalidParam, "unknown command"))
 	}
@@ -358,4 +404,377 @@ func (h *Handler) sendError(conn *ws.Conn, seq int64, err *errors.Error) {
 		Seq:     seq,
 	})
 	conn.SendEnvelope(errEnv)
+}
+
+// sendResult 发送结果
+func (h *Handler) sendResult(conn *ws.Conn, seq int64, data interface{}) {
+	result := protocol.NewEnvelope(protocol.CmdResult, seq, data)
+	conn.SendEnvelope(result)
+}
+
+// ============== 好友相关处理 ==============
+
+// handleGetFriends 获取好友列表
+func (h *Handler) handleGetFriends(conn *ws.Conn, env *protocol.Envelope) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	friends, err := h.seakingClient.GetFriends(ctx, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get friends")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"friends": friends,
+	})
+}
+
+// handleSendFriendRequest 发送好友请求
+func (h *Handler) handleSendFriendRequest(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		ToUid   string `json:"to_uid"`
+		Message string `json:"message"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.ToUid == "" {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.seakingClient.SendFriendRequest(ctx, conn.UID(), body.ToUid, body.Message)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to send friend request")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendAck(conn, env.Seq, 0)
+}
+
+// handleGetFriendRequests 获取待处理好友请求
+func (h *Handler) handleGetFriendRequests(conn *ws.Conn, env *protocol.Envelope) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	requests, err := h.seakingClient.GetPendingFriendRequests(ctx, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get friend requests")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"requests": requests,
+	})
+}
+
+// handleAcceptFriendRequest 接受好友请求
+func (h *Handler) handleAcceptFriendRequest(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		RequestId uint `json:"request_id"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.RequestId == 0 {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.seakingClient.AcceptFriendRequest(ctx, body.RequestId, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to accept friend request")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendAck(conn, env.Seq, 0)
+}
+
+// handleRejectFriendRequest 拒绝好友请求
+func (h *Handler) handleRejectFriendRequest(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		RequestId uint `json:"request_id"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.RequestId == 0 {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.seakingClient.RejectFriendRequest(ctx, body.RequestId, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to reject friend request")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendAck(conn, env.Seq, 0)
+}
+
+// handleDeleteFriend 删除好友
+func (h *Handler) handleDeleteFriend(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		FriendId string `json:"friend_id"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.FriendId == "" {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := h.seakingClient.DeleteFriend(ctx, conn.UID(), body.FriendId)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to delete friend")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendAck(conn, env.Seq, 0)
+}
+
+// ============== 会话相关处理 ==============
+
+// handleGetConversations 获取会话列表
+func (h *Handler) handleGetConversations(conn *ws.Conn, env *protocol.Envelope) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := h.seakingClient.GetUserConversations(ctx, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get conversations")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"conversations": resp.Conversations,
+	})
+}
+
+// handleCreateConversation 创建会话
+func (h *Handler) handleCreateConversation(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		Type      int      `json:"type"`       // 1=单聊, 2=群聊
+		MemberIds []string `json:"member_ids"`
+		Name      string   `json:"name,omitempty"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.Type != 1 && body.Type != 2 {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+	if len(body.MemberIds) == 0 {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := h.seakingClient.CreateConversation(ctx, body.Type, conn.UID(), body.MemberIds, body.Name)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create conversation")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"cid": resp.Cid,
+	})
+}
+
+// handleGetConversationMembers 获取会话成员
+func (h *Handler) handleGetConversationMembers(conn *ws.Conn, env *protocol.Envelope) {
+	cid, ok := env.Body.(string)
+	if !ok {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 检查权限
+	accessResp, err := h.seakingClient.CheckAccess(ctx, conn.UID(), cid)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to check access")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+	if !accessResp.HasAccess {
+		h.sendError(conn, env.Seq, errors.ErrNotInConversation)
+		return
+	}
+
+	resp, err := h.seakingClient.GetConversationMembers(ctx, cid)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get conversation members")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"members": resp.Members,
+	})
+}
+
+// ============== 群组相关处理 ==============
+
+// handleGetGroups 获取群组列表
+func (h *Handler) handleGetGroups(conn *ws.Conn, env *protocol.Envelope) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	groups, err := h.seakingClient.GetUserGroups(ctx, conn.UID())
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get groups")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"groups": groups,
+	})
+}
+
+// handleCreateGroup 创建群组
+func (h *Handler) handleCreateGroup(conn *ws.Conn, env *protocol.Envelope) {
+	var body struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		MemberIds   []string `json:"member_ids"`
+	}
+	bodyData, _ := json.Marshal(env.Body)
+	if err := json.Unmarshal(bodyData, &body); err != nil {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	if body.Name == "" {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	group, err := h.seakingClient.CreateGroup(ctx, conn.UID(), body.Name, body.Description, body.MemberIds)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create group")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"group": group,
+	})
+}
+
+// handleGetGroupInfo 获取群组信息
+func (h *Handler) handleGetGroupInfo(conn *ws.Conn, env *protocol.Envelope) {
+	groupId, ok := env.Body.(string)
+	if !ok {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	group, err := h.seakingClient.GetGroupInfo(ctx, groupId)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get group info")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"group": group,
+	})
+}
+
+// handleGetGroupMembers 获取群组成员
+func (h *Handler) handleGetGroupMembers(conn *ws.Conn, env *protocol.Envelope) {
+	groupId, ok := env.Body.(string)
+	if !ok {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	members, err := h.seakingClient.GetGroupMembers(ctx, groupId)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get group members")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"members": members,
+	})
+}
+
+// ============== 用户相关处理 ==============
+
+// handleGetUserInfo 获取用户信息
+func (h *Handler) handleGetUserInfo(conn *ws.Conn, env *protocol.Envelope) {
+	uid, ok := env.Body.(string)
+	if !ok {
+		h.sendError(conn, env.Seq, errors.ErrInvalidParam)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	user, err := h.seakingClient.GetUserInfo(ctx, uid)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get user info")
+		h.sendError(conn, env.Seq, errors.ErrInternal)
+		return
+	}
+
+	h.sendResult(conn, env.Seq, map[string]interface{}{
+		"user": user,
+	})
 }

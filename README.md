@@ -9,9 +9,10 @@
 │                          Client                                  │
 │                    (Mobile / Web / Desktop)                      │
 └─────────────────────────────────────────────────────────────────┘
-                                │
-                                │ WebSocket
-                                ▼
+                    │                       │
+          HTTP API  │                       │ WebSocket
+      (register/login)                      │
+                    ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Gateway 集群                             │
 │              (WebSocket连接管理 / 消息路由 / 鉴权)                 │
@@ -34,6 +35,16 @@
 │       (mychat DB)         │   │       (mychat_relay DB)       │
 └───────────────────────────┘   └───────────────────────────────┘
 ```
+
+## 通信架构
+
+本系统仅使用两种通信方式：
+
+1. **HTTP API** (仅 Gateway 暴露): 用于用户注册和登录
+2. **WebSocket** (Gateway): 客户端与服务端的实时通信通道
+3. **JSON-RPC 2.0** (内部): 服务间的内部通信
+
+**注意**: SeaKing 和 Relay 服务不暴露 REST API，仅通过 JSON-RPC 与 Gateway 通信。
 
 ## 项目结构
 
@@ -59,7 +70,6 @@ My-Chat-Backend/
 ├── seaking/              # 用户中心服务
 │   ├── cmd/
 │   └── internal/
-│       ├── api/          # REST API
 │       ├── conf/
 │       ├── model/        # 数据模型
 │       ├── rpc/          # JSON-RPC
@@ -69,7 +79,6 @@ My-Chat-Backend/
 ├── relay/                # 事件存储服务
 │   ├── cmd/
 │   └── internal/
-│       ├── api/
 │       ├── conf/
 │       ├── model/
 │       ├── rpc/
@@ -129,88 +138,97 @@ make test
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| Gateway | 8080 | WebSocket 入口 |
-| SeaKing | 8081 | 用户中心 API |
-| Relay | 8082 | 事件存储 API |
+| Gateway | 8080 | HTTP API + WebSocket |
+| SeaKing | 8081 | JSON-RPC (内部) |
+| Relay | 8082 | JSON-RPC (内部) |
 
-## API 文档
+## Gateway API
 
-### SeaKing API
-
-#### 公开接口
+### HTTP 接口
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/register` | 用户注册 |
-| POST | `/api/v1/login` | 用户登录 |
+| POST | `/api/register` | 用户注册 |
+| POST | `/api/login` | 用户登录 |
+| GET | `/api/stats` | 获取在线统计 |
+| GET | `/health` | 健康检查 |
 
-#### 用户接口 (需认证)
+### 注册请求
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/profile` | 获取个人资料 |
-| PUT | `/api/v1/profile` | 更新个人资料 |
-| PUT | `/api/v1/password` | 修改密码 |
+```json
+POST /api/register
+{
+    "username": "user1",
+    "password": "password123",
+    "nickname": "User One",
+    "phone": "13800138000",
+    "email": "user@example.com"
+}
+```
 
-#### 好友接口 (需认证)
+### 登录请求
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/friends` | 获取好友列表 |
-| POST | `/api/v1/friends/request` | 发送好友请求 |
-| POST | `/api/v1/friends/accept` | 接受好友请求 |
-| POST | `/api/v1/friends/reject` | 拒绝好友请求 |
-| DELETE | `/api/v1/friends/:uid` | 删除好友 |
-| POST | `/api/v1/friends/block` | 拉黑好友 |
-| POST | `/api/v1/friends/unblock` | 取消拉黑 |
-| GET | `/api/v1/friends/requests` | 待处理请求列表 |
+```json
+POST /api/login
+{
+    "username": "user1",
+    "password": "password123",
+    "device_id": "device-uuid",
+    "platform": "ios"
+}
+```
 
-#### 群组接口 (需认证)
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/groups` | 获取群组列表 |
-| POST | `/api/v1/groups` | 创建群组 |
-| GET | `/api/v1/groups/:id` | 获取群组详情 |
-| PUT | `/api/v1/groups/:id` | 更新群组信息 |
-| DELETE | `/api/v1/groups/:id` | 解散群组 |
-| GET | `/api/v1/groups/:id/members` | 获取群成员 |
-| POST | `/api/v1/groups/:id/members` | 添加成员 |
-| DELETE | `/api/v1/groups/:id/members/:uid` | 移除成员 |
-| POST | `/api/v1/groups/:id/leave` | 退出群组 |
-| POST | `/api/v1/groups/:id/transfer` | 转让群主 |
-| POST | `/api/v1/groups/:id/admin` | 设置管理员 |
-
-### Relay API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/events` | 存储事件 |
-| GET | `/api/v1/events/:mid` | 获取单个事件 |
-| POST | `/api/v1/events/query` | 查询事件 |
-| GET | `/api/v1/events/sync` | 同步最新事件 |
-| POST | `/api/v1/receipts` | 更新已读回执 |
-| GET | `/api/v1/receipts` | 获取已读回执 |
-| POST | `/api/v1/reactions` | 添加消息反应 |
-| DELETE | `/api/v1/reactions` | 移除消息反应 |
-| GET | `/api/v1/reactions/:mid` | 获取消息反应 |
-
-### Gateway WebSocket
+### WebSocket 连接
 
 连接地址: `ws://localhost:8080/ws?token=<JWT_TOKEN>`
 
-#### 命令类型
+### WebSocket 命令
+
+| 命令 | 说明 | 方向 |
+|------|------|------|
+| `ping` | 心跳请求 | C -> S |
+| `pong` | 心跳响应 | S -> C |
+| `event` | 事件消息 | 双向 |
+| `ack` | 消息确认 | S -> C |
+| `error` | 错误响应 | S -> C |
+| `result` | 结果响应 | S -> C |
+| `subscribe` | 订阅会话 | C -> S |
+| `unsubscribe` | 取消订阅 | C -> S |
+| `sync` | 同步历史消息 | C -> S |
+
+#### 好友命令
 
 | 命令 | 说明 |
 |------|------|
-| `ping` | 心跳请求 |
-| `pong` | 心跳响应 |
-| `event` | 事件消息 |
-| `ack` | 消息确认 |
-| `error` | 错误响应 |
-| `subscribe` | 订阅会话 |
-| `unsubscribe` | 取消订阅 |
-| `sync` | 同步历史消息 |
+| `get_friends` | 获取好友列表 |
+| `send_friend_request` | 发送好友请求 |
+| `get_friend_requests` | 获取待处理好友请求 |
+| `accept_friend_request` | 接受好友请求 |
+| `reject_friend_request` | 拒绝好友请求 |
+| `delete_friend` | 删除好友 |
+
+#### 会话命令
+
+| 命令 | 说明 |
+|------|------|
+| `get_conversations` | 获取会话列表 |
+| `create_conversation` | 创建会话 |
+| `get_conversation_members` | 获取会话成员 |
+
+#### 群组命令
+
+| 命令 | 说明 |
+|------|------|
+| `get_groups` | 获取群组列表 |
+| `create_group` | 创建群组 |
+| `get_group_info` | 获取群组信息 |
+| `get_group_members` | 获取群组成员 |
+
+#### 用户命令
+
+| 命令 | 说明 |
+|------|------|
+| `get_user_info` | 获取用户信息 |
 
 ## 消息类型 (Kind)
 
@@ -225,20 +243,30 @@ make test
 | 12 | 消息反应 | ✅ | Emoji 回应 |
 | 13 | 转发消息 | ✅ | 单条/合并转发 |
 
-## 服务间通信
-
-服务间使用 JSON-RPC 2.0 协议通信：
+## 服务间通信 (JSON-RPC 2.0)
 
 ### SeaKing RPC 方法
 
 ```
-seaking.checkAccess       - 检查会话访问权限
-seaking.getConversation   - 获取会话信息
+seaking.register              - 用户注册
+seaking.login                 - 用户登录
+seaking.validateToken         - 验证 JWT Token
+seaking.getUserInfo           - 获取用户信息
+seaking.checkAccess           - 检查会话访问权限
+seaking.getConversation       - 获取会话信息
 seaking.getConversationMembers - 获取会话成员
-seaking.createConversation - 创建会话
-seaking.getUserConversations - 获取用户会话列表
-seaking.validateToken     - 验证 JWT Token
-seaking.getUserInfo       - 获取用户信息
+seaking.createConversation    - 创建会话
+seaking.getUserConversations  - 获取用户会话列表
+seaking.getFriends            - 获取好友列表
+seaking.sendFriendRequest     - 发送好友请求
+seaking.getPendingFriendRequests - 获取待处理好友请求
+seaking.acceptFriendRequest   - 接受好友请求
+seaking.rejectFriendRequest   - 拒绝好友请求
+seaking.deleteFriend          - 删除好友
+seaking.getUserGroups         - 获取用户群组列表
+seaking.createGroup           - 创建群组
+seaking.getGroupInfo          - 获取群组信息
+seaking.getGroupMembers       - 获取群组成员
 ```
 
 ### Relay RPC 方法
@@ -282,8 +310,8 @@ MaxConnPerUser = 5
 HeartbeatTimeout = 30
 WriteTimeout = 10
 ReadTimeout = 10
-SeaKingAddr = "http://localhost:8081/api/rpc"
-RelayAddr = "http://localhost:8082/api/rpc"
+SeaKingAddr = "http://localhost:8081"
+RelayAddr = "http://localhost:8082"
 ```
 
 ### SeaKing 配置
@@ -341,29 +369,35 @@ File = "relay"
 
 [RelayConfiguration]
 MaxEventsPerQuery = 100
+RevokeTimeWindow = 120
+EditTimeWindow = 86400
 ```
 
 ## 开发进度
 
-### 已完成 ✅
+### 已完成
 
 - [x] 项目架构搭建
 - [x] 协议定义 (MsgPack)
 - [x] Gateway WebSocket 管理
+- [x] Gateway HTTP API (注册/登录)
+- [x] Gateway WebSocket 命令 (好友/群组/会话/用户)
 - [x] SeaKing 用户管理
 - [x] SeaKing 好友管理
 - [x] SeaKing 群组管理
 - [x] SeaKing 会话管理
+- [x] SeaKing JSON-RPC 服务
 - [x] Relay 事件存储
 - [x] Relay 消息查询
 - [x] Relay 已读回执
 - [x] Relay 消息反应
+- [x] Relay JSON-RPC 服务
 - [x] 服务间 JSON-RPC 通信
 - [x] 消息撤销验证 (2分钟窗口)
 - [x] 消息编辑验证 (24小时窗口)
 - [x] 单元测试
 
-### 待实现 🚧
+### 待实现
 
 - [ ] 文件管理系统 (S3/OSS)
 - [ ] 消息搜索 (Elasticsearch/MeiliSearch)

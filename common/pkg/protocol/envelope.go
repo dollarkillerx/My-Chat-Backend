@@ -26,6 +26,44 @@ const (
 	CmdSearch = "search"
 	// CmdSearchResult 搜索结果
 	CmdSearchResult = "search_result"
+
+	// 好友相关命令
+	// CmdGetFriends 获取好友列表
+	CmdGetFriends = "get_friends"
+	// CmdSendFriendRequest 发送好友请求
+	CmdSendFriendRequest = "send_friend_request"
+	// CmdGetFriendRequests 获取待处理好友请求
+	CmdGetFriendRequests = "get_friend_requests"
+	// CmdAcceptFriendRequest 接受好友请求
+	CmdAcceptFriendRequest = "accept_friend_request"
+	// CmdRejectFriendRequest 拒绝好友请求
+	CmdRejectFriendRequest = "reject_friend_request"
+	// CmdDeleteFriend 删除好友
+	CmdDeleteFriend = "delete_friend"
+	// CmdResult 通用结果响应
+	CmdResult = "result"
+
+	// 会话相关命令
+	// CmdGetConversations 获取会话列表
+	CmdGetConversations = "get_conversations"
+	// CmdCreateConversation 创建会话
+	CmdCreateConversation = "create_conversation"
+	// CmdGetConversationMembers 获取会话成员
+	CmdGetConversationMembers = "get_conversation_members"
+
+	// 群组相关命令
+	// CmdGetGroups 获取群组列表
+	CmdGetGroups = "get_groups"
+	// CmdCreateGroup 创建群组
+	CmdCreateGroup = "create_group"
+	// CmdGetGroupInfo 获取群组信息
+	CmdGetGroupInfo = "get_group_info"
+	// CmdGetGroupMembers 获取群组成员
+	CmdGetGroupMembers = "get_group_members"
+
+	// 用户相关命令
+	// CmdGetUserInfo 获取用户信息
+	CmdGetUserInfo = "get_user_info"
 )
 
 // Envelope 网络封包
