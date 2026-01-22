@@ -1,0 +1,29 @@
+[ServiceConfiguration]
+Name = "relay"
+Port = "8082"
+Debug = true
+
+[LoggerConfiguration]
+Filename = "./logs/relay.log"
+MaxSize = 100
+MaxBackups = 3
+MaxAge = 28
+Compress = true
+
+[PostgresConfiguration]
+Host = "127.0.0.1"
+Port = 5432
+User = "postgres"
+Password = "postgres"
+DBName = "mychat_relay"
+SSLMode = false
+TimeZone = "Asia/Shanghai"
+
+[RedisConfiguration]
+Addr = "127.0.0.1:6379"
+Password = ""
+Db = 1
+
+[RelayConfiguration]
+RetentionDays = 0
+MaxQueryLimit = 100

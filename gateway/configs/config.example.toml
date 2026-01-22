@@ -1,0 +1,35 @@
+# Gateway 配置示例
+# 复制为 config.toml 并修改配置
+
+[ServiceConfiguration]
+Name = "gateway"
+Port = "8080"
+Debug = true
+
+[RedisConfiguration]
+Host = "localhost"
+Port = "6379"
+Password = ""
+DB = 0
+
+[LoggerConfiguration]
+Level = "debug"      # debug, info, warn, error
+Path = "./logs"
+File = "gateway"
+MaxSize = 100        # MB
+MaxBackups = 10
+MaxAge = 30          # days
+Compress = true
+
+[JWTConfiguration]
+Secret = "your-jwt-secret-key-change-in-production"
+ExpireHour = 168     # 7 days
+
+[GatewayConfiguration]
+WSPath = "/ws"
+MaxConnPerUser = 5
+HeartbeatTimeout = 30    # seconds
+WriteTimeout = 10        # seconds
+ReadTimeout = 10         # seconds
+SeaKingAddr = "http://localhost:8081/api/rpc"
+RelayAddr = "http://localhost:8082/api/rpc"

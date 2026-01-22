@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: mychat-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mychat
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: mychat-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Gateway 服务
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: mychat-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVICECONFIGURATION_PORT=8080
+      - REDISCONFIGURATION_ADDR=redis:6379
+      - GATEWAYCONFIGURATION_SEAKINGADDR=seaking:8081
+      - GATEWAYCONFIGURATION_RELAYADDR=relay:8082
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # SeaKing 服务
+  seaking:
+    build:
+      context: .
+      dockerfile: seaking/Dockerfile
+    container_name: mychat-seaking
+    ports:
+      - "8081:8081"
+    environment:
+      - SERVICECONFIGURATION_PORT=8081
+      - POSTGRESCONFIGURATION_HOST=postgres
+      - POSTGRESCONFIGURATION_PORT=5432
+      - POSTGRESCONFIGURATION_USER=postgres
+      - POSTGRESCONFIGURATION_PASSWORD=postgres
+      - POSTGRESCONFIGURATION_DBNAME=mychat
+      - REDISCONFIGURATION_ADDR=redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Relay 服务
+  relay:
+    build:
+      context: .
+      dockerfile: relay/Dockerfile
+    container_name: mychat-relay
+    ports:
+      - "8082:8082"
+    environment:
+      - SERVICECONFIGURATION_PORT=8082
+      - POSTGRESCONFIGURATION_HOST=postgres
+      - POSTGRESCONFIGURATION_PORT=5432
+      - POSTGRESCONFIGURATION_USER=postgres
+      - POSTGRESCONFIGURATION_PASSWORD=postgres
+      - POSTGRESCONFIGURATION_DBNAME=mychat_relay
+      - REDISCONFIGURATION_ADDR=redis:6379
+      - REDISCONFIGURATION_DB=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: mychat-network

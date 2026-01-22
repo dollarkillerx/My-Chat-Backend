@@ -1,0 +1,36 @@
+# SeaKing 配置示例
+# 复制为 config.toml 并修改配置
+
+[ServiceConfiguration]
+Name = "seaking"
+Port = "8081"
+Debug = true
+
+[PostgresConfiguration]
+Host = "localhost"
+Port = "5432"
+User = "postgres"
+Password = "postgres"
+Database = "mychat"
+SSLMode = "disable"
+MaxIdleConns = 10
+MaxOpenConns = 100
+
+[RedisConfiguration]
+Host = "localhost"
+Port = "6379"
+Password = ""
+DB = 0
+
+[LoggerConfiguration]
+Level = "debug"      # debug, info, warn, error
+Path = "./logs"
+File = "seaking"
+MaxSize = 100        # MB
+MaxBackups = 10
+MaxAge = 30          # days
+Compress = true
+
+[JWTConfiguration]
+Secret = "your-jwt-secret-key-change-in-production"
+ExpireHour = 168     # 7 days

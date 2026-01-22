@@ -1,0 +1,37 @@
+# Relay 配置示例
+# 复制为 config.toml 并修改配置
+
+[ServiceConfiguration]
+Name = "relay"
+Port = "8082"
+Debug = true
+
+[PostgresConfiguration]
+Host = "localhost"
+Port = "5432"
+User = "postgres"
+Password = "postgres"
+Database = "mychat_relay"
+SSLMode = "disable"
+MaxIdleConns = 10
+MaxOpenConns = 100
+
+[RedisConfiguration]
+Host = "localhost"
+Port = "6379"
+Password = ""
+DB = 0
+
+[LoggerConfiguration]
+Level = "debug"      # debug, info, warn, error
+Path = "./logs"
+File = "relay"
+MaxSize = 100        # MB
+MaxBackups = 10
+MaxAge = 30          # days
+Compress = true
+
+[RelayConfiguration]
+MaxEventsPerQuery = 100
+RevokeTimeWindow = 120      # seconds (2 minutes)
+EditTimeWindow = 86400      # seconds (24 hours)
