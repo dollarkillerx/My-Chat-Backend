@@ -10,12 +10,13 @@
 │                    (Mobile / Web / Desktop)                      │
 └─────────────────────────────────────────────────────────────────┘
                     │                       │
-          HTTP API  │                       │ WebSocket
-      (register/login)                      │
+        JSON-RPC    │                       │ WebSocket
+    (register/login/│                       │ (消息推送)
+     friends/groups)│                       │
                     ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Gateway 集群                             │
-│              (WebSocket连接管理 / 消息路由 / 鉴权)                 │
+│              (JSON-RPC接口 / WebSocket消息推送 / 鉴权)            │
 └─────────────────────────────────────────────────────────────────┘
                     │                       │
           JSON-RPC  │                       │ JSON-RPC
@@ -38,13 +39,15 @@
 
 ## 通信架构
 
-本系统仅使用两种通信方式：
+本系统使用两种通信方式：
 
-1. **HTTP API** (仅 Gateway 暴露): 用于用户注册和登录
-2. **WebSocket** (Gateway): 客户端与服务端的实时通信通道
-3. **JSON-RPC 2.0** (内部): 服务间的内部通信
+1. **JSON-RPC 2.0**: 所有业务操作（注册、登录、好友、群组、会话等）
+2. **WebSocket**: 仅用于实时消息推送和接收
 
-**注意**: SeaKing 和 Relay 服务不暴露 REST API，仅通过 JSON-RPC 与 Gateway 通信。
+**注意**:
+- 客户端通过 Gateway 的 JSON-RPC 接口进行业务操作
+- 客户端通过 Gateway 的 WebSocket 接收消息推送
+- SeaKing 和 Relay 是内部服务，不直接暴露给客户端
 
 ## 项目结构
 
@@ -64,7 +67,8 @@ My-Chat-Backend/
 │   ├── cmd/              # 入口
 │   └── internal/
 │       ├── conf/         # 配置
-│       ├── handler/      # 消息处理
+│       ├── handler/      # WebSocket消息处理
+│       ├── rpc/          # JSON-RPC处理
 │       ├── server/       # HTTP服务
 │       └── ws/           # WebSocket管理
 ├── seaking/              # 用户中心服务
@@ -138,51 +142,116 @@ make test
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| Gateway | 8080 | HTTP API + WebSocket |
+| Gateway | 8080 | JSON-RPC + WebSocket |
 | SeaKing | 8081 | JSON-RPC (内部) |
 | Relay | 8082 | JSON-RPC (内部) |
 
-## Gateway API
+## Gateway 客户端接口
 
-### HTTP 接口
+### JSON-RPC 接口
 
-| 方法 | 路径 | 说明 |
+端点: `POST /api/rpc`
+
+请求格式:
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "方法名",
+    "params": { ... },
+    "id": 1
+}
+```
+
+#### 认证相关（无需Token）
+
+| 方法 | 说明 | 参数 |
 |------|------|------|
-| POST | `/api/register` | 用户注册 |
-| POST | `/api/login` | 用户登录 |
-| GET | `/api/stats` | 获取在线统计 |
-| GET | `/health` | 健康检查 |
+| `register` | 用户注册 | `username`, `password`, `nickname`, `phone?`, `email?` |
+| `login` | 用户登录 | `username`, `password`, `device_id`, `platform` |
 
-### 注册请求
+#### 用户相关（需要Token）
 
+| 方法 | 说明 | 参数 |
+|------|------|------|
+| `getUserInfo` | 获取用户信息 | `uid?` (不传则获取自己) |
+
+#### 好友相关（需要Token）
+
+| 方法 | 说明 | 参数 |
+|------|------|------|
+| `getFriends` | 获取好友列表 | 无 |
+| `sendFriendRequest` | 发送好友请求 | `to_uid`, `message?` |
+| `getPendingFriendRequests` | 获取待处理好友请求 | 无 |
+| `acceptFriendRequest` | 接受好友请求 | `request_id` |
+| `rejectFriendRequest` | 拒绝好友请求 | `request_id` |
+| `deleteFriend` | 删除好友 | `friend_id` |
+
+#### 会话相关（需要Token）
+
+| 方法 | 说明 | 参数 |
+|------|------|------|
+| `getConversations` | 获取会话列表 | 无 |
+| `createConversation` | 创建会话 | `type`, `member_ids`, `name?` |
+| `getConversationMembers` | 获取会话成员 | `cid` |
+
+#### 群组相关（需要Token）
+
+| 方法 | 说明 | 参数 |
+|------|------|------|
+| `getGroups` | 获取群组列表 | 无 |
+| `createGroup` | 创建群组 | `name`, `description?`, `member_ids?` |
+| `getGroupInfo` | 获取群组信息 | `group_id` |
+| `getGroupMembers` | 获取群组成员 | `group_id` |
+
+### 示例
+
+注册:
 ```json
-POST /api/register
 {
-    "username": "user1",
-    "password": "password123",
-    "nickname": "User One",
-    "phone": "13800138000",
-    "email": "user@example.com"
+    "jsonrpc": "2.0",
+    "method": "register",
+    "params": {
+        "username": "user1",
+        "password": "password123",
+        "nickname": "User One"
+    },
+    "id": 1
 }
 ```
 
-### 登录请求
-
+登录:
 ```json
-POST /api/login
 {
-    "username": "user1",
-    "password": "password123",
-    "device_id": "device-uuid",
-    "platform": "ios"
+    "jsonrpc": "2.0",
+    "method": "login",
+    "params": {
+        "username": "user1",
+        "password": "password123",
+        "device_id": "device-uuid",
+        "platform": "ios"
+    },
+    "id": 2
 }
 ```
 
-### WebSocket 连接
+获取好友列表（需要在Header中带Token）:
+```
+Authorization: Bearer <token>
+```
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "getFriends",
+    "params": {},
+    "id": 3
+}
+```
+
+### WebSocket 接口
 
 连接地址: `ws://localhost:8080/ws?token=<JWT_TOKEN>`
 
-### WebSocket 命令
+WebSocket 仅用于消息推送相关操作:
 
 | 命令 | 说明 | 方向 |
 |------|------|------|
@@ -191,44 +260,9 @@ POST /api/login
 | `event` | 事件消息 | 双向 |
 | `ack` | 消息确认 | S -> C |
 | `error` | 错误响应 | S -> C |
-| `result` | 结果响应 | S -> C |
 | `subscribe` | 订阅会话 | C -> S |
 | `unsubscribe` | 取消订阅 | C -> S |
 | `sync` | 同步历史消息 | C -> S |
-
-#### 好友命令
-
-| 命令 | 说明 |
-|------|------|
-| `get_friends` | 获取好友列表 |
-| `send_friend_request` | 发送好友请求 |
-| `get_friend_requests` | 获取待处理好友请求 |
-| `accept_friend_request` | 接受好友请求 |
-| `reject_friend_request` | 拒绝好友请求 |
-| `delete_friend` | 删除好友 |
-
-#### 会话命令
-
-| 命令 | 说明 |
-|------|------|
-| `get_conversations` | 获取会话列表 |
-| `create_conversation` | 创建会话 |
-| `get_conversation_members` | 获取会话成员 |
-
-#### 群组命令
-
-| 命令 | 说明 |
-|------|------|
-| `get_groups` | 获取群组列表 |
-| `create_group` | 创建群组 |
-| `get_group_info` | 获取群组信息 |
-| `get_group_members` | 获取群组成员 |
-
-#### 用户命令
-
-| 命令 | 说明 |
-|------|------|
-| `get_user_info` | 获取用户信息 |
 
 ## 消息类型 (Kind)
 
@@ -243,7 +277,7 @@ POST /api/login
 | 12 | 消息反应 | ✅ | Emoji 回应 |
 | 13 | 转发消息 | ✅ | 单条/合并转发 |
 
-## 服务间通信 (JSON-RPC 2.0)
+## 内部服务通信 (JSON-RPC 2.0)
 
 ### SeaKing RPC 方法
 
@@ -379,9 +413,8 @@ EditTimeWindow = 86400
 
 - [x] 项目架构搭建
 - [x] 协议定义 (MsgPack)
-- [x] Gateway WebSocket 管理
-- [x] Gateway HTTP API (注册/登录)
-- [x] Gateway WebSocket 命令 (好友/群组/会话/用户)
+- [x] Gateway JSON-RPC 接口
+- [x] Gateway WebSocket 消息推送
 - [x] SeaKing 用户管理
 - [x] SeaKing 好友管理
 - [x] SeaKing 群组管理
