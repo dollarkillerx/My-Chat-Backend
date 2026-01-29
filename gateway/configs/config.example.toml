@@ -33,3 +33,13 @@ WriteTimeout = 10        # seconds
 ReadTimeout = 10         # seconds
 SeaKingAddr = "http://localhost:8081/api/rpc"
 RelayAddr = "http://localhost:8082/api/rpc"
+UploadRateLimit = 100    # 每小时每用户最大上传次数，0 表示不限制
+
+# Cloudflare R2 存储配置（可选，不配置则禁用文件上传）
+[R2Configuration]
+Endpoint = "https://your-account-id.r2.cloudflarestorage.com"
+AccessKeyID = "your-access-key-id"
+SecretAccessKey = "your-secret-access-key"
+BucketName = "your-bucket-name"
+ExportEndpoint = "your-public-domain.com"  # R2 公开访问域名
+Region = "auto"

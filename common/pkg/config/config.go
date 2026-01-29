@@ -46,6 +46,16 @@ type JWTConfiguration struct {
 	ExpireHour int    `mapstructure:"ExpireHour"`
 }
 
+// R2Configuration Cloudflare R2 存储配置
+type R2Configuration struct {
+	Endpoint        string `mapstructure:"Endpoint"`        // R2 端点
+	AccessKeyID     string `mapstructure:"AccessKeyID"`     // 访问密钥ID
+	SecretAccessKey string `mapstructure:"SecretAccessKey"` // 访问密钥
+	BucketName      string `mapstructure:"BucketName"`      // 存储桶名称
+	ExportEndpoint  string `mapstructure:"ExportEndpoint"`  // 公开访问端点
+	Region          string `mapstructure:"Region"`          // 区域，通常为 "auto"
+}
+
 // InitConfiguration 初始化配置
 func InitConfiguration(configName string, configPaths []string, config interface{}) error {
 	viper.SetConfigName(configName)

@@ -9,6 +9,7 @@ import (
 	"github.com/my-chat/common/pkg/auth"
 	"github.com/my-chat/common/pkg/log"
 	"github.com/my-chat/common/pkg/middleware"
+	"github.com/my-chat/common/pkg/storage"
 	"github.com/my-chat/gateway/internal/conf"
 	"github.com/my-chat/gateway/internal/handler"
 	"github.com/my-chat/gateway/internal/rpc"
@@ -18,31 +19,36 @@ import (
 
 // Server Gateway服务器
 type Server struct {
-	config     conf.Config
-	hub        *ws.Hub
-	handler    *handler.Handler
-	rpcHandler *rpc.Handler
-	jwtManager *auth.JWTManager
-	redis      *redis.Client
-	engine     *gin.Engine
-	upgrader   websocket.Upgrader
-	connIdGen  int64
+	config        conf.Config
+	hub           *ws.Hub
+	handler       *handler.Handler
+	rpcHandler    *rpc.Handler
+	uploadHandler *handler.UploadHandler
+	jwtManager    *auth.JWTManager
+	redis         *redis.Client
+	r2            *storage.R2Storage
+	engine        *gin.Engine
+	upgrader      websocket.Upgrader
+	connIdGen     int64
 }
 
 // NewServer 创建服务器
-func NewServer(config conf.Config, redisClient *redis.Client) *Server {
+func NewServer(config conf.Config, redisClient *redis.Client, r2 *storage.R2Storage) *Server {
 	jwtManager := auth.NewJWTManager(config.JWT.Secret, config.JWT.ExpireHour)
 	hub := ws.NewHub(config.Gateway)
 	h := handler.NewHandler(hub, jwtManager, config.Gateway.RelayAddr, config.Gateway.SeaKingAddr)
 	rpcHandler := rpc.NewHandler(jwtManager, config.Gateway.SeaKingAddr, config.Gateway.RelayAddr)
+	uploadHandler := handler.NewUploadHandler(r2, redisClient, config.Gateway.UploadRateLimit)
 
 	return &Server{
-		config:     config,
-		hub:        hub,
-		handler:    h,
-		rpcHandler: rpcHandler,
-		jwtManager: jwtManager,
-		redis:      redisClient,
+		config:        config,
+		hub:           hub,
+		handler:       h,
+		rpcHandler:    rpcHandler,
+		uploadHandler: uploadHandler,
+		jwtManager:    jwtManager,
+		redis:         redisClient,
+		r2:            r2,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -91,6 +97,45 @@ func (s *Server) registerRoutes() {
 
 	// 统计接口
 	s.engine.GET("/api/stats", s.getStats)
+
+	// 文件上传接口（需要认证）
+	upload := s.engine.Group("/api/upload")
+	upload.Use(s.authMiddleware())
+	{
+		upload.POST("/base64", s.uploadHandler.Upload)         // Base64 上传
+		upload.POST("/multipart", s.uploadHandler.UploadMultipart) // Multipart 上传
+	}
+}
+
+// authMiddleware JWT认证中间件
+func (s *Server) authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			token = c.Query("token")
+		}
+
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token required"})
+			c.Abort()
+			return
+		}
+
+		// 去掉 Bearer 前缀
+		if len(token) > 7 && token[:7] == "Bearer " {
+			token = token[7:]
+		}
+
+		claims, err := s.jwtManager.ParseToken(token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			c.Abort()
+			return
+		}
+
+		c.Set("uid", claims.Uid)
+		c.Next()
+	}
 }
 
 // healthCheck 健康检查

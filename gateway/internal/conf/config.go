@@ -9,6 +9,7 @@ type Config struct {
 	Logger  config.LoggerConfiguration   `mapstructure:"LoggerConfiguration"`
 	JWT     config.JWTConfiguration      `mapstructure:"JWTConfiguration"`
 	Gateway GatewayConfiguration         `mapstructure:"GatewayConfiguration"`
+	R2      config.R2Configuration       `mapstructure:"R2Configuration"`
 }
 
 // GatewayConfiguration Gateway专属配置
@@ -23,4 +24,7 @@ type GatewayConfiguration struct {
 	// 服务发现
 	SeaKingAddr string `mapstructure:"SeaKingAddr"`
 	RelayAddr   string `mapstructure:"RelayAddr"`
+
+	// 上传限制
+	UploadRateLimit int `mapstructure:"UploadRateLimit"` // 每小时每用户最大上传次数，0 表示不限制
 }
