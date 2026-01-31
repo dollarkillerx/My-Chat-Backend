@@ -119,6 +119,47 @@ CREATE TABLE IF NOT EXISTS conversation_members (
 CREATE INDEX idx_conv_members_conv ON conversation_members(conversation_id);
 CREATE INDEX idx_conv_members_user ON conversation_members(user_id);
 
+-- 用户密钥表 (加密)
+CREATE TABLE IF NOT EXISTS user_keys (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(32) UNIQUE NOT NULL,
+    public_key TEXT NOT NULL,
+    encrypted_private_key TEXT NOT NULL,
+    key_salt VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_user_keys_user ON user_keys(user_id);
+
+-- 私聊密钥表 (加密)
+CREATE TABLE IF NOT EXISTS chat_keys (
+    id SERIAL PRIMARY KEY,
+    conversation_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(32) NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(conversation_id, user_id)
+);
+
+CREATE INDEX idx_chat_keys_conv ON chat_keys(conversation_id);
+
+-- 群组密钥表 (加密)
+CREATE TABLE IF NOT EXISTS group_keys (
+    id SERIAL PRIMARY KEY,
+    group_id VARCHAR(32) NOT NULL,
+    user_id VARCHAR(32) NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(group_id, user_id, version)
+);
+
+CREATE INDEX idx_group_keys_group ON group_keys(group_id);
+CREATE INDEX idx_group_keys_user ON group_keys(user_id);
+
 -- ============================================
 -- Relay 数据库表结构 (mychat_relay)
 -- ============================================

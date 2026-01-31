@@ -50,6 +50,10 @@ func main() {
 			&model.GroupMember{},
 			&model.Conversation{},
 			&model.ConversationMember{},
+			// 加密密钥表
+			&model.UserKey{},
+			&model.ChatKey{},
+			&model.GroupKey{},
 		); err != nil {
 			log.Fatal().Err(err).Msg("failed to migrate database")
 		}

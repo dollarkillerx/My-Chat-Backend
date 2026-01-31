@@ -633,3 +633,450 @@ Relay 原则：
 3. Client 直传 S3
 4. Client 发送 Kind=3 Event 引用文件
 
+---
+
+## 20. 消息加密设计
+
+### 20.1 加密架构概述
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              消息加密架构                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐              ┌──────────────────────┐              ┌─────────────┐
+│  │   用户 A    │              │        服务器         │              │   用户 B    │
+│  ├─────────────┤              ├──────────────────────┤              ├─────────────┤
+│  │ 公钥 A      │─────────────>│ 公钥 A (明文)        │              │ 公钥 B      │
+│  │ 私钥 A      │─────────────>│ 私钥 A (密码加密)    │              │ 私钥 B      │
+│  │ (本地缓存)   │              │ 私钥 B (密码加密)    │<─────────────│ (本地缓存)   │
+│  └─────────────┘              │ 公钥 B (明文)        │              └─────────────┘
+│                               │                      │
+│                               │ 会话密钥 (公钥加密)   │
+│                               │ 加密消息             │
+│                               └──────────────────────┘
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 20.2 密钥类型
+
+| 密钥类型 | 存储位置 | 加密方式 | 用途 |
+|---------|---------|---------|------|
+| **用户公钥** | SeaKing | 明文 | 加密会话密钥 |
+| **用户私钥** | SeaKing | 用户密码加密 | 解密会话密钥 |
+| **私聊会话密钥** | SeaKing | 用户公钥加密 | 加密私聊消息 |
+| **群聊会话密钥** | SeaKing | 用户公钥加密 | 加密群聊消息 |
+
+### 20.3 加密算法
+
+| 用途 | 算法 | 说明 |
+|-----|------|------|
+| 用户密钥对 | RSA-2048 | 非对称加密，用于加密会话密钥 |
+| 私钥保护 | AES-256-GCM + PBKDF2 | 使用密码派生密钥加密私钥 |
+| 消息加密 | AES-256-GCM | 对称加密，高性能 |
+
+---
+
+## 21. 用户密钥交互流程
+
+### 21.1 用户注册 - 生成密钥对
+
+```
+┌──────────┐                              ┌──────────┐
+│  Client  │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 用户输入: username, password        │
+     │                                         │
+     │  2. 客户端本地生成 RSA-2048 密钥对       │
+     │     - public_key                        │
+     │     - private_key                       │
+     │                                         │
+     │  3. 加密私钥                             │
+     │     - salt = random(16 bytes)           │
+     │     - derived_key = PBKDF2(password, salt, 100000)
+     │     - encrypted_private_key = AES-GCM(private_key, derived_key)
+     │                                         │
+     │  4. 注册请求                             │
+     │  ─────────────────────────────────────> │
+     │  {                                      │
+     │    username,                            │
+     │    password_hash,  // bcrypt(password)  │
+     │    public_key,                          │
+     │    encrypted_private_key,               │
+     │    key_salt                             │
+     │  }                                      │
+     │                                         │
+     │  5. 存储用户信息和密钥                    │
+     │  <───────────────────────────────────── │
+     │  { ok, uid }                            │
+     │                                         │
+     │  6. 本地缓存私钥                         │
+     │     Keychain/KeyStore 存储 private_key  │
+     │                                         │
+```
+
+**注册请求协议：**
+
+```
+cmd: "register"
+body: {
+  0: username,              // 用户名
+  1: password_hash,         // 密码哈希 (bcrypt)
+  2: public_key,            // 公钥 (Base64)
+  3: encrypted_private_key, // 加密私钥 (Base64)
+  4: key_salt               // 盐值 (Base64)
+}
+```
+
+### 21.2 用户登录 - 下载并解密私钥
+
+```
+┌──────────┐                              ┌──────────┐
+│  Client  │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 登录请求                             │
+     │  ─────────────────────────────────────> │
+     │  { username, password }                 │
+     │                                         │
+     │  2. 验证密码，返回用户信息和加密私钥       │
+     │  <───────────────────────────────────── │
+     │  {                                      │
+     │    uid,                                 │
+     │    token,                               │
+     │    public_key,                          │
+     │    encrypted_private_key,               │
+     │    key_salt                             │
+     │  }                                      │
+     │                                         │
+     │  3. 解密私钥                             │
+     │     - derived_key = PBKDF2(password, key_salt, 100000)
+     │     - private_key = AES-GCM-Decrypt(encrypted_private_key, derived_key)
+     │                                         │
+     │  4. 本地缓存                             │
+     │     - Keychain/KeyStore 存储 private_key│
+     │     - 内存缓存 public_key               │
+     │                                         │
+```
+
+**登录响应协议：**
+
+```
+cmd: "login_resp"
+body: {
+  0: uid,                   // 用户ID
+  1: token,                 // 访问令牌
+  2: public_key,            // 公钥
+  3: encrypted_private_key, // 加密私钥
+  4: key_salt               // 盐值
+}
+```
+
+### 21.3 私聊 - 首次会话建立
+
+```
+┌──────────┐              ┌──────────┐              ┌──────────┐
+│ Client A │              │ SeaKing  │              │ Client B │
+└────┬─────┘              └────┬─────┘              └────┬─────┘
+     │                         │                         │
+     │  1. 获取 B 的公钥        │                         │
+     │  ──────────────────────>│                         │
+     │  { uid: B }             │                         │
+     │                         │                         │
+     │  <──────────────────────│                         │
+     │  { public_key_B }       │                         │
+     │                         │                         │
+     │  2. 生成会话密钥         │                         │
+     │     chat_key = random(256 bits)                   │
+     │                         │                         │
+     │  3. 分别用双方公钥加密   │                         │
+     │     encrypted_key_a = RSA(chat_key, public_key_A) │
+     │     encrypted_key_b = RSA(chat_key, public_key_B) │
+     │                         │                         │
+     │  4. 上传加密的会话密钥   │                         │
+     │  ──────────────────────>│                         │
+     │  {                      │                         │
+     │    cid,                 │                         │
+     │    keys: [              │                         │
+     │      { uid: A, encrypted_key: encrypted_key_a },  │
+     │      { uid: B, encrypted_key: encrypted_key_b }   │
+     │    ]                    │                         │
+     │  }                      │                         │
+     │                         │                         │
+     │  5. 本地缓存 chat_key   │                         │
+     │                         │                         │
+```
+
+**创建会话密钥协议：**
+
+```
+cmd: "create_chat_key"
+body: {
+  0: cid,           // 会话ID
+  1: [              // 加密密钥列表
+    { 0: uid_a, 1: encrypted_key_a },
+    { 0: uid_b, 1: encrypted_key_b }
+  ]
+}
+```
+
+### 21.4 私聊 - 发送加密消息
+
+```
+┌──────────┐              ┌──────────┐              ┌──────────┐
+│ Client A │              │  Relay   │              │ Client B │
+└────┬─────┘              └────┬─────┘              └────┬─────┘
+     │                         │                         │
+     │  1. 用 chat_key 加密消息│                         │
+     │     nonce = random(12 bytes)                      │
+     │     ciphertext = AES-GCM(message, chat_key, nonce)│
+     │                         │                         │
+     │  2. 发送加密 Event      │                         │
+     │  ──────────────────────>│                         │
+     │  {                      │                         │
+     │    k: 1,                │                         │
+     │    cid: "d:A:B",        │                         │
+     │    data: {              │                         │
+     │      0: true,           │  // encrypted           │
+     │      1: ciphertext,     │  // Base64              │
+     │      2: nonce           │  // Base64              │
+     │    }                    │                         │
+     │  }                      │                         │
+     │                         │                         │
+     │                         │  3. 转发给 B            │
+     │                         │  ─────────────────────> │
+     │                         │                         │
+     │                         │  4. B 解密消息          │
+     │                         │     message = AES-GCM-Decrypt(ciphertext, chat_key, nonce)
+     │                         │                         │
+```
+
+**加密消息 Event 格式：**
+
+```
+body = {
+  0: ev_v,
+  1: cid,
+  2: k,           // kind=1 文本
+  3: mid,
+  4: t,
+  5: flg,
+  6: tags,
+  7: {            // data (加密)
+    0: true,      // encrypted 标记
+    1: ciphertext,// 密文 (Base64)
+    2: nonce      // 随机数 (Base64)
+  }
+}
+```
+
+### 21.5 私聊 - 获取会话密钥（新设备/首次进入会话）
+
+```
+┌──────────┐                              ┌──────────┐
+│  Client  │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 请求会话密钥                         │
+     │  ─────────────────────────────────────> │
+     │  { cid: "d:A:B" }                       │
+     │                                         │
+     │  2. 返回当前用户的加密密钥               │
+     │  <───────────────────────────────────── │
+     │  { encrypted_key }                      │
+     │                                         │
+     │  3. 解密得到 chat_key                   │
+     │     chat_key = RSA-Decrypt(encrypted_key, private_key)
+     │                                         │
+     │  4. 本地缓存 chat_key                   │
+     │                                         │
+```
+
+**获取会话密钥协议：**
+
+```
+cmd: "get_chat_key"
+body: {
+  0: cid    // 会话ID
+}
+
+// 响应
+cmd: "chat_key_resp"
+body: {
+  0: cid,
+  1: encrypted_key  // 用当前用户公钥加密的会话密钥
+}
+```
+
+### 21.6 群聊 - 创建群组并生成群密钥
+
+```
+┌──────────┐                              ┌──────────┐
+│  群主    │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 创建群组请求                         │
+     │  ─────────────────────────────────────> │
+     │  { name, members: [A, B, C] }           │
+     │                                         │
+     │  2. 服务端创建群组，返回群ID和成员公钥    │
+     │  <───────────────────────────────────── │
+     │  {                                      │
+     │    group_id,                            │
+     │    member_keys: [                       │
+     │      { uid: A, public_key: pk_a },      │
+     │      { uid: B, public_key: pk_b },      │
+     │      { uid: C, public_key: pk_c }       │
+     │    ]                                    │
+     │  }                                      │
+     │                                         │
+     │  3. 生成群密钥                           │
+     │     group_key = random(256 bits)        │
+     │                                         │
+     │  4. 为每个成员加密群密钥                 │
+     │     FOR each member:                    │
+     │       encrypted_key = RSA(group_key, member_public_key)
+     │                                         │
+     │  5. 上传加密的群密钥                     │
+     │  ─────────────────────────────────────> │
+     │  {                                      │
+     │    group_id,                            │
+     │    keys: [                              │
+     │      { uid: A, encrypted_key: ek_a },   │
+     │      { uid: B, encrypted_key: ek_b },   │
+     │      { uid: C, encrypted_key: ek_c }    │
+     │    ]                                    │
+     │  }                                      │
+     │                                         │
+```
+
+**创建群密钥协议：**
+
+```
+cmd: "create_group_key"
+body: {
+  0: group_id,
+  1: [    // 加密密钥列表
+    { 0: uid_a, 1: encrypted_key_a },
+    { 0: uid_b, 1: encrypted_key_b },
+    { 0: uid_c, 1: encrypted_key_c }
+  ],
+  2: version  // 密钥版本，默认 1
+}
+```
+
+### 21.7 群聊 - 新成员加入
+
+```
+┌──────────┐                              ┌──────────┐
+│  管理员  │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 邀请新成员                           │
+     │  ─────────────────────────────────────> │
+     │  { group_id, new_member: D }            │
+     │                                         │
+     │  2. 返回新成员公钥                       │
+     │  <───────────────────────────────────── │
+     │  { uid: D, public_key: pk_d }           │
+     │                                         │
+     │  3. 用新成员公钥加密群密钥               │
+     │     encrypted_key_d = RSA(group_key, pk_d)
+     │                                         │
+     │  4. 上传新成员的加密密钥                 │
+     │  ─────────────────────────────────────> │
+     │  {                                      │
+     │    group_id,                            │
+     │    keys: [{ uid: D, encrypted_key: ek_d }]
+     │  }                                      │
+     │                                         │
+```
+
+### 21.8 群聊 - 成员退出（可选密钥轮换）
+
+```
+┌──────────┐                              ┌──────────┐
+│  管理员  │                              │ SeaKing  │
+└────┬─────┘                              └────┬─────┘
+     │                                         │
+     │  1. 移除成员 / 成员主动退出              │
+     │  ─────────────────────────────────────> │
+     │  { group_id, remove_member: D }         │
+     │                                         │
+     │  2. 返回剩余成员公钥                     │
+     │  <───────────────────────────────────── │
+     │  { members: [A, B, C], public_keys: [...] }
+     │                                         │
+     │  3. [可选] 生成新群密钥                  │
+     │     new_group_key = random(256 bits)    │
+     │     version = old_version + 1           │
+     │                                         │
+     │  4. [可选] 为剩余成员加密新密钥          │
+     │  ─────────────────────────────────────> │
+     │  {                                      │
+     │    group_id,                            │
+     │    keys: [...],                         │
+     │    version: 2                           │
+     │  }                                      │
+     │                                         │
+```
+
+**说明：**
+- 密钥轮换是可选的，取决于群的安全级别
+- 轮换后，退出成员无法解密新消息
+- 历史消息仍可被退出成员解密（使用旧版本密钥）
+
+---
+
+## 22. 加密相关数据表
+
+### 22.1 user_keys - 用户密钥表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| user_id | VARCHAR(32) | 用户ID (UNIQUE) |
+| public_key | TEXT | 公钥 (明文, Base64) |
+| encrypted_private_key | TEXT | 私钥 (密码加密, Base64) |
+| key_salt | VARCHAR(64) | 密钥派生盐值 |
+| created_at | TIMESTAMP | 创建时间 |
+| updated_at | TIMESTAMP | 更新时间 |
+
+### 22.2 chat_keys - 私聊密钥表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conversation_id | VARCHAR(64) | 会话ID |
+| user_id | VARCHAR(32) | 用户ID |
+| encrypted_key | TEXT | 会话密钥 (用户公钥加密) |
+| created_at | TIMESTAMP | 创建时间 |
+
+**约束:** UNIQUE(conversation_id, user_id)
+
+### 22.3 group_keys - 群密钥表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| group_id | VARCHAR(32) | 群组ID |
+| user_id | VARCHAR(32) | 用户ID |
+| encrypted_key | TEXT | 群密钥 (用户公钥加密) |
+| version | INTEGER | 密钥版本 |
+| created_at | TIMESTAMP | 创建时间 |
+
+**约束:** UNIQUE(group_id, user_id, version)
+
+---
+
+## 23. 安全注意事项
+
+1. **密码强度** - 私钥安全依赖用户密码，建议强制密码复杂度要求
+2. **私钥缓存** - 客户端应使用安全存储（iOS Keychain / Android KeyStore）
+3. **密钥备份** - 用户忘记密码将无法解密私钥，可考虑：
+   - 恢复码机制
+   - 安全问题验证
+   - 管理员重置（会丢失历史消息解密能力）
+4. **传输安全** - 所有通信必须使用 TLS 1.3
+5. **密钥轮换** - 敏感群组在成员退出时应更新群密钥
+6. **服务端限制** - 服务端无法解密消息内容（没有用户密码）
+

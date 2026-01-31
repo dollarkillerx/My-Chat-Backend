@@ -12,6 +12,7 @@ import (
 	"github.com/my-chat/seaking/internal/rpc"
 	"github.com/my-chat/seaking/internal/service/conversation"
 	"github.com/my-chat/seaking/internal/service/group"
+	"github.com/my-chat/seaking/internal/service/key"
 	"github.com/my-chat/seaking/internal/service/relation"
 	"github.com/my-chat/seaking/internal/service/user"
 	"github.com/my-chat/seaking/internal/storage"
@@ -35,9 +36,10 @@ func NewServer(config conf.Config, storage *storage.Storage) *Server {
 	relationService := relation.NewService(storage)
 	groupService := group.NewService(storage)
 	convService := conversation.NewService(storage)
+	keyService := key.NewService(storage)
 
 	// 创建RPC处理器（内部服务通信）
-	rpcHandler := rpc.NewHandler(userService, convService, relationService, groupService, jwtManager)
+	rpcHandler := rpc.NewHandler(userService, convService, relationService, groupService, keyService, jwtManager)
 
 	return &Server{
 		config:     config,

@@ -8,6 +8,7 @@ import (
 	"github.com/my-chat/common/pkg/auth"
 	"github.com/my-chat/seaking/internal/service/conversation"
 	"github.com/my-chat/seaking/internal/service/group"
+	"github.com/my-chat/seaking/internal/service/key"
 	"github.com/my-chat/seaking/internal/service/relation"
 	"github.com/my-chat/seaking/internal/service/user"
 )
@@ -18,6 +19,7 @@ type Handler struct {
 	convService     *conversation.Service
 	relationService *relation.Service
 	groupService    *group.Service
+	keyService      *key.Service
 	jwtManager      *auth.JWTManager
 	methods         map[string]MethodHandler
 }
@@ -49,12 +51,13 @@ type Error struct {
 }
 
 // NewHandler 创建RPC处理器
-func NewHandler(userService *user.Service, convService *conversation.Service, relationService *relation.Service, groupService *group.Service, jwtManager *auth.JWTManager) *Handler {
+func NewHandler(userService *user.Service, convService *conversation.Service, relationService *relation.Service, groupService *group.Service, keyService *key.Service, jwtManager *auth.JWTManager) *Handler {
 	h := &Handler{
 		userService:     userService,
 		convService:     convService,
 		relationService: relationService,
 		groupService:    groupService,
+		keyService:      keyService,
 		jwtManager:      jwtManager,
 		methods:         make(map[string]MethodHandler),
 	}
@@ -90,6 +93,14 @@ func (h *Handler) registerMethods() {
 	h.methods["seaking.createGroup"] = h.createGroup
 	h.methods["seaking.getGroupInfo"] = h.getGroupInfo
 	h.methods["seaking.getGroupMembers"] = h.getGroupMembers
+
+	// 加密密钥相关
+	h.methods["seaking.getUserPublicKey"] = h.getUserPublicKey
+	h.methods["seaking.getMemberPublicKeys"] = h.getMemberPublicKeys
+	h.methods["seaking.getChatKey"] = h.getChatKey
+	h.methods["seaking.createChatKey"] = h.createChatKey
+	h.methods["seaking.getGroupKey"] = h.getGroupKey
+	h.methods["seaking.createGroupKey"] = h.createGroupKey
 }
 
 // Handle 处理RPC请求
@@ -317,14 +328,42 @@ func (h *Handler) getUserInfo(ctx context.Context, params json.RawMessage) (inte
 
 // register 用户注册
 func (h *Handler) register(ctx context.Context, params json.RawMessage) (interface{}, error) {
-	var req user.RegisterRequest
+	var req struct {
+		Username            string `json:"username"`
+		Password            string `json:"password"`
+		Nickname            string `json:"nickname"`
+		Phone               string `json:"phone"`
+		Email               string `json:"email"`
+		PublicKey           string `json:"public_key"`
+		EncryptedPrivateKey string `json:"encrypted_private_key"`
+		KeySalt             string `json:"key_salt"`
+	}
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
 	}
 
-	u, err := h.userService.Register(ctx, &req)
+	u, err := h.userService.Register(ctx, &user.RegisterRequest{
+		Username: req.Username,
+		Password: req.Password,
+		Nickname: req.Nickname,
+		Phone:    req.Phone,
+		Email:    req.Email,
+	})
 	if err != nil {
 		return nil, err
+	}
+
+	// 如果提供了密钥，则存储用户密钥
+	if req.PublicKey != "" && req.EncryptedPrivateKey != "" && req.KeySalt != "" {
+		if err := h.keyService.CreateUserKey(ctx, &key.CreateUserKeyRequest{
+			UserID:              u.ID,
+			PublicKey:           req.PublicKey,
+			EncryptedPrivateKey: req.EncryptedPrivateKey,
+			KeySalt:             req.KeySalt,
+		}); err != nil {
+			// 密钥存储失败，但用户已创建，记录错误但不影响注册
+			// 用户可以后续重新上传密钥
+		}
 	}
 
 	return map[string]interface{}{
@@ -359,7 +398,7 @@ func (h *Handler) login(ctx context.Context, params json.RawMessage) (interface{
 		return nil, err
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"token": token,
 		"user": map[string]interface{}{
 			"uid":      u.ID,
@@ -368,7 +407,19 @@ func (h *Handler) login(ctx context.Context, params json.RawMessage) (interface{
 			"avatar":   u.Avatar,
 			"status":   u.Status,
 		},
-	}, nil
+	}
+
+	// 获取用户密钥信息（用于新设备解密私钥）
+	userKey, err := h.keyService.GetUserKey(ctx, u.ID)
+	if err == nil && userKey != nil {
+		result["encryption"] = map[string]interface{}{
+			"public_key":            userKey.PublicKey,
+			"encrypted_private_key": userKey.EncryptedPrivateKey,
+			"key_salt":              userKey.KeySalt,
+		}
+	}
+
+	return result, nil
 }
 
 // getFriends 获取好友列表
@@ -629,5 +680,189 @@ func (h *Handler) getGroupMembers(ctx context.Context, params json.RawMessage) (
 
 	return map[string]interface{}{
 		"members": memberInfos,
+	}, nil
+}
+
+// ==================== 加密密钥相关 ====================
+
+// getUserPublicKey 获取用户公钥
+func (h *Handler) getUserPublicKey(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		Uid string `json:"uid"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	publicKey, err := h.keyService.GetUserPublicKey(ctx, req.Uid)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"uid":        req.Uid,
+		"public_key": publicKey,
+	}, nil
+}
+
+// getMemberPublicKeys 批量获取成员公钥
+func (h *Handler) getMemberPublicKeys(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		Uids []string `json:"uids"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	publicKeys, err := h.keyService.GetUserPublicKeys(ctx, req.Uids)
+	if err != nil {
+		return nil, err
+	}
+
+	var keys []map[string]string
+	for uid, pk := range publicKeys {
+		keys = append(keys, map[string]string{
+			"uid":        uid,
+			"public_key": pk,
+		})
+	}
+
+	return map[string]interface{}{
+		"keys": keys,
+	}, nil
+}
+
+// getChatKey 获取私聊会话密钥
+func (h *Handler) getChatKey(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		Cid string `json:"cid"`
+		Uid string `json:"uid"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	chatKey, err := h.keyService.GetChatKey(ctx, req.Cid, req.Uid)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"cid":           chatKey.ConversationID,
+		"encrypted_key": chatKey.EncryptedKey,
+	}, nil
+}
+
+// createChatKey 创建私聊会话密钥
+func (h *Handler) createChatKey(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		Cid  string `json:"cid"`
+		Keys []struct {
+			Uid          string `json:"uid"`
+			EncryptedKey string `json:"encrypted_key"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	// 检查密钥是否已存在
+	exists, err := h.keyService.ChatKeyExists(ctx, req.Cid)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return map[string]interface{}{
+			"success": true,
+			"message": "chat key already exists",
+		}, nil
+	}
+
+	var keyEntries []key.ChatKeyEntry
+	for _, k := range req.Keys {
+		keyEntries = append(keyEntries, key.ChatKeyEntry{
+			UserID:       k.Uid,
+			EncryptedKey: k.EncryptedKey,
+		})
+	}
+
+	if err := h.keyService.CreateChatKeys(ctx, &key.CreateChatKeysRequest{
+		ConversationID: req.Cid,
+		Keys:           keyEntries,
+	}); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+	}, nil
+}
+
+// getGroupKey 获取群组密钥
+func (h *Handler) getGroupKey(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		GroupId string `json:"group_id"`
+		Uid     string `json:"uid"`
+		Version int    `json:"version"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	groupKey, err := h.keyService.GetGroupKey(ctx, req.GroupId, req.Uid, req.Version)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"group_id":      groupKey.GroupID,
+		"encrypted_key": groupKey.EncryptedKey,
+		"version":       groupKey.Version,
+	}, nil
+}
+
+// createGroupKey 创建群组密钥
+func (h *Handler) createGroupKey(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req struct {
+		GroupId string `json:"group_id"`
+		Keys    []struct {
+			Uid          string `json:"uid"`
+			EncryptedKey string `json:"encrypted_key"`
+		} `json:"keys"`
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+
+	// 如果没有指定版本，获取最新版本并+1
+	version := req.Version
+	if version == 0 {
+		latestVersion, err := h.keyService.GetLatestGroupKeyVersion(ctx, req.GroupId)
+		if err != nil {
+			return nil, err
+		}
+		version = latestVersion + 1
+	}
+
+	var keyEntries []key.GroupKeyEntry
+	for _, k := range req.Keys {
+		keyEntries = append(keyEntries, key.GroupKeyEntry{
+			UserID:       k.Uid,
+			EncryptedKey: k.EncryptedKey,
+		})
+	}
+
+	if err := h.keyService.CreateGroupKeys(ctx, &key.CreateGroupKeysRequest{
+		GroupID: req.GroupId,
+		Keys:    keyEntries,
+		Version: version,
+	}); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"version": version,
 	}, nil
 }
