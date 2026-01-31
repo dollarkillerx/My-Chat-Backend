@@ -309,6 +309,105 @@ WebSocket 仅用于消息推送相关操作:
 | `unsubscribe` | 取消订阅 | C -> S |
 | `sync` | 同步历史消息 | C -> S |
 
+## 实时消息推送
+
+### 推送架构
+
+```
+┌──────────┐   WebSocket    ┌────────────────────────────────────────┐
+│ Client A │◄──────────────►│              Gateway                   │
+└──────────┘                │                                        │
+                            │  ┌──────────────────────────────────┐  │
+┌──────────┐   WebSocket    │  │              Hub                 │  │
+│ Client B │◄──────────────►│  │                                  │  │
+└──────────┘                │  │  • conns: 所有连接               │  │
+                            │  │  • userConns: 用户→连接映射       │  │
+┌──────────┐   WebSocket    │  │  • subscriptions: 会话→连接订阅   │  │
+│ Client C │◄──────────────►│  │                                  │  │
+└──────────┘                │  └──────────────────────────────────┘  │
+                            │                                        │
+                            │  ┌──────────────────────────────────┐  │
+                            │  │           Handler                │  │
+                            │  │  • 解析消息 • 检查权限            │  │
+                            │  │  • 存储消息 • 广播消息            │  │
+                            │  └──────────────────────────────────┘  │
+                            └────────────────────────────────────────┘
+```
+
+### 核心组件
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| Hub | `gateway/internal/ws/hub.go` | 连接管理中心，维护订阅关系，执行广播 |
+| Conn | `gateway/internal/ws/conn.go` | 连接封装，双向消息泵 (Read/Write Pump) |
+| Handler | `gateway/internal/handler/handler.go` | 消息处理，权限校验，存储转发 |
+
+### Hub 数据结构
+
+```go
+type Hub struct {
+    conns         sync.Map  // connId -> *Conn (所有连接)
+    userConns     sync.Map  // uid -> map[connId]*Conn (用户多设备)
+    subscriptions sync.Map  // cid -> map[connId]*Conn (会话订阅)
+}
+```
+
+### 消息推送流程
+
+```
+1. 客户端发送消息
+   Client ──Event──> Gateway
+
+2. Handler 处理
+   ├─ CheckAccess (SeaKing) 验证权限
+   ├─ StoreEvent (Relay) 持久化
+   └─ Ack 返回消息ID
+
+3. 广播给订阅者
+   Hub.Broadcast(cid, data)
+   └─ subscriptions[cid] 遍历所有连接
+      └─ conn.Send(data) 写入发送队列
+
+4. WritePump 实际发送
+   send channel ──> WebSocket.WriteMessage
+```
+
+### 订阅机制
+
+```
+1. 客户端连接 WebSocket
+2. 发送 Subscribe 命令: {cmd: "subscribe", body: "d:user1:user2"}
+3. Handler 验证权限后调用 Hub.Subscribe(conn, cid)
+4. Hub 记录订阅: subscriptions[cid][connId] = conn
+5. 后续该会话消息自动推送给所有订阅者
+```
+
+### 多设备支持
+
+同一用户多设备登录时，每个设备独立连接：
+
+```go
+userConns["user_A"] = {
+    "conn_ios":     conn1,   // iPhone
+    "conn_android": conn2,   // Android
+    "conn_web":     conn3,   // Web
+}
+```
+
+发送给用户的消息会推送到所有设备。超过 `MaxConnPerUser` 限制时，最旧连接被踢出。
+
+### 消息处理矩阵
+
+| Kind | 类型 | 持久化 | 广播 | 说明 |
+|------|------|--------|------|------|
+| 1 | 文本消息 | ✅ | ✅ | 存储后广播 |
+| 3 | 文件消息 | ✅ | ✅ | 存储后广播 |
+| 5 | 撤销消息 | ✅ | ✅ | 验证权限后存储广播 |
+| 7 | 编辑消息 | ✅ | ✅ | 验证权限后存储广播 |
+| 10 | 已读回执 | ✅ | ✅ | 更新水位线后广播 |
+| 11 | 正在输入 | ❌ | ✅ | 仅转发，不存储 |
+| 12 | 消息反应 | ✅ | ✅ | 存储后广播 |
+
 ## 消息类型 (Kind)
 
 | Kind | 名称 | 持久化 | 说明 |
